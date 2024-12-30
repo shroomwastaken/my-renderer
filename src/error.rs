@@ -2,6 +2,7 @@
 pub enum RendererError {
 	InitError(String),
 	DrawError(String),
+	FileReadError(String),
 }
 
 impl std::fmt::Display for RendererError {
@@ -9,6 +10,7 @@ impl std::fmt::Display for RendererError {
 		match self {
 			RendererError::InitError(s) => { Ok(f.write_fmt(format_args!("{}", s))?) }
 			RendererError::DrawError(s) => { Ok(f.write_fmt(format_args!("{}", s))?) }
+			RendererError::FileReadError(s) => { Ok(f.write_fmt(format_args!("unable to read file {}", s))?) }
 		}
 	}
 }
@@ -18,6 +20,7 @@ impl std::error::Error for RendererError {
 		match self {
 			RendererError::InitError(_) => None,
 			RendererError::DrawError(_) => None,
+			RendererError::FileReadError(_) => None,
 		}
 	}
 }

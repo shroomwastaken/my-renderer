@@ -1,10 +1,14 @@
 mod error;
 
+use std::{env::args, vec};
+
 use sdl2::{
 	event::Event, keyboard::Keycode,
-	pixels::Color, rect::FPoint,
+	pixels::Color, rect::{FPoint, FRect, Point},
 	render::Canvas, video::Window, EventPump,
 };
+
+use sdl2::gfx::primitives::DrawRenderer;
 
 use error::RendererError;
 
@@ -49,22 +53,70 @@ impl Mat4x4 {
 struct Vec3D { x: f32, y: f32, z: f32, }
 
 impl Vec3D {
-	pub fn add(&mut self, number: f32) {
+	pub fn add_num_in_place(&mut self, number: f32) {
 		self.x += number;
 		self.y += number;
 		self.z += number;
 	}
+
+	pub fn sub_num_in_place(&mut self, number: f32) {
+		self.add_num_in_place(-number);
+	}
+
+	pub fn add_vec(&self, vector: &Vec3D) -> Vec3D {
+		let mut res: Vec3D = self.clone();
+		res.add_vec_in_place(vector);
+		return res;
+	}
+
+	pub fn add_vec_in_place(&mut self, vector: &Vec3D) {
+		self.x += vector.x;
+		self.y += vector.y;
+		self.z += vector.z;
+	}
+
+	pub fn sub_vec(&self, vector: &Vec3D) -> Vec3D {
+		let mut res: Vec3D = self.clone();
+		res.sub_vec_in_place(vector);
+		return res;
+	}
+
+	pub fn sub_vec_in_place(&mut self, vector: &Vec3D) {
+		self.x -= vector.x;
+		self.y -= vector.y;
+		self.z -= vector.z;
+	}
+
+	pub fn scale_in_place(&mut self, scale_factor: f32) {
+		self.x *= scale_factor;
+		self.y *= scale_factor;
+		self.z *= scale_factor;
+	}
+
+	pub fn dot_product(&self, vector: &Vec3D) -> f32 {
+		return self.x * vector.x + self.y * vector.y + self.z * vector.z;
+	}
+
+	pub fn cross_product(&self, vector: &Vec3D) -> Vec3D {
+		return Vec3D {
+			x: self.y * vector.z - self.z * vector.y,
+			y: self.z * vector.x - self.x * vector.z,
+			z: self.x * vector.y - self.y * vector.x
+		};
+	}
+
+	pub fn len(&self) -> f32 {
+		return (self.x * self.x + self.y * self.y + self.z * self.z).sqrt();
+	}
 }
 
 #[derive(Debug, Clone)]
-struct Triangle { points: [Vec3D; 3], }
+struct Triangle { points: [Vec3D; 3], color: Color, }
 
 impl Triangle {
 	pub fn translate(&mut self, x: f32, y: f32, z: f32) {
 		for p in &mut self.points {
-			p.x += x;
-			p.y += y;
-			p.z += z;
+			p.add_vec_in_place(&Vec3D { x, y, z, });
 		}
 	}
 
@@ -73,10 +125,89 @@ impl Triangle {
 			*p = matrix.multiply_vector(p);
 		}
 	}
+
+	pub fn normal(&self) -> Vec3D {
+		let line1: Vec3D = self.points[1].sub_vec(&self.points[0]);
+		let line2: Vec3D = self.points[2].sub_vec(&self.points[0]);
+
+		let mut calc_normal: Vec3D = line1.cross_product(&line2);
+		calc_normal.scale_in_place(1.0 / calc_normal.len());
+		return calc_normal;
+	}
 }
 
 #[derive(Debug, Clone)]
 struct Mesh { tris: Vec<Triangle>, }
+
+impl Mesh {
+	pub fn from_obj_file(filename: &str) -> anyhow::Result<Mesh> {
+		let mut res: Mesh = Mesh { tris: vec![], };
+		let mut vertices: Vec<Vec3D> = vec![];
+		let mut normals: Vec<Vec3D> = vec![];
+
+		if let Ok(f) = std::fs::read_to_string(filename) {
+			for line in f.split("\n") {
+				if line.starts_with("v ") {
+					let mut numbers = line.trim().split(" ");
+					numbers.next();
+					vertices.push(Vec3D {
+						x: numbers.next().unwrap().parse::<f32>().unwrap(),
+						y: numbers.next().unwrap().parse::<f32>().unwrap(),
+						z: numbers.next().unwrap().parse::<f32>().unwrap(),
+					});
+				} else if line.starts_with("vn") {
+					let mut numbers = line.trim().split(" ");
+					numbers.next();
+					normals.push(Vec3D {
+						x: numbers.next().unwrap().parse::<f32>().unwrap(),
+						y: numbers.next().unwrap().parse::<f32>().unwrap(),
+						z: numbers.next().unwrap().parse::<f32>().unwrap(),
+					});
+				} else if line.starts_with("f") {
+					if !line.contains("/") {
+						let mut numbers = line.trim().split(" ");
+						numbers.next();
+						res.tris.push(Triangle {
+							points: [
+								vertices[numbers.next().unwrap().parse::<usize>().unwrap() - 1].clone(),
+								vertices[numbers.next().unwrap().parse::<usize>().unwrap() - 1].clone(),
+								vertices[numbers.next().unwrap().parse::<usize>().unwrap() - 1].clone(),
+							],
+							color: Color::RGB(0, 0, 0),
+						});
+					} else {
+						let mut numbers = line.trim().split(" ");
+						numbers.next();
+						let mut i1 = numbers.next()
+							.unwrap()
+							.split("/")
+							.map(|x| x.trim().parse::<usize>().unwrap());
+						let mut i2 = numbers.next()
+							.unwrap()
+							.split("/")
+							.map(|x| x.trim().parse::<usize>().unwrap());
+						let mut i3 = numbers.next()
+							.unwrap()
+							.split("/")
+							.map(|x| x.trim().parse::<usize>().unwrap());
+						res.tris.push(Triangle {
+							points: [
+								vertices[i1.next().unwrap() - 1].clone(),
+								vertices[i2.next().unwrap() - 1].clone(),
+								vertices[i3.next().unwrap() - 1].clone(),
+							],
+							color: Color::RGB(0, 0, 0),
+						});
+					}
+				}
+			}
+		} else {
+			return Err(RendererError::FileReadError(filename.to_string()))?;
+		}
+
+		return Ok(res);
+	}
+}
 
 fn initialize_canvas(dimensions: (u32, u32), title: &str) -> anyhow::Result<(Canvas<Window>, EventPump)> {
 	let ctx = sdl2::init().or_else(|err| {
@@ -103,31 +234,15 @@ fn initialize_canvas(dimensions: (u32, u32), title: &str) -> anyhow::Result<(Can
 }
 
 fn main() -> anyhow::Result<()> {
-	let cube_mesh: Mesh = Mesh { tris: vec![
-		// south
-		Triangle { points: [Vec3D { x: 0.0, y: 0.0, z: 0.0, }, Vec3D { x: 0.0, y: 1.0, z: 0.0, }, Vec3D { x: 1.0, y: 1.0, z: 0.0, }], },
-		Triangle { points: [Vec3D { x: 0.0, y: 0.0, z: 0.0, }, Vec3D { x: 1.0, y: 1.0, z: 0.0, }, Vec3D { x: 1.0, y: 0.0, z: 0.0, }], },
-
-		// east
-		Triangle { points: [Vec3D { x: 1.0, y: 0.0, z: 0.0, }, Vec3D { x: 1.0, y: 1.0, z: 0.0, }, Vec3D { x: 1.0, y: 1.0, z: 1.0, }], },
-		Triangle { points: [Vec3D { x: 1.0, y: 0.0, z: 0.0, }, Vec3D { x: 1.0, y: 1.0, z: 1.0, }, Vec3D { x: 1.0, y: 0.0, z: 1.0, }], },
-
-		// north
-		Triangle { points: [Vec3D { x: 1.0, y: 0.0, z: 1.0, }, Vec3D { x: 1.0, y: 1.0, z: 1.0, }, Vec3D { x: 0.0, y: 1.0, z: 1.0, }], },
-		Triangle { points: [Vec3D { x: 1.0, y: 0.0, z: 1.0, }, Vec3D { x: 0.0, y: 1.0, z: 1.0, }, Vec3D { x: 0.0, y: 0.0, z: 1.0, }], },
-
-		// west
-		Triangle { points: [Vec3D { x: 0.0, y: 0.0, z: 1.0, }, Vec3D { x: 0.0, y: 1.0, z: 1.0, }, Vec3D { x: 0.0, y: 1.0, z: 0.0, }], },
-		Triangle { points: [Vec3D { x: 0.0, y: 0.0, z: 1.0, }, Vec3D { x: 0.0, y: 1.0, z: 0.0, }, Vec3D { x: 0.0, y: 0.0, z: 0.0, }], },
-
-		// top
-		Triangle { points: [Vec3D { x: 0.0, y: 1.0, z: 0.0, }, Vec3D { x: 0.0, y: 1.0, z: 1.0, }, Vec3D { x: 1.0, y: 1.0, z: 1.0, }], },
-		Triangle { points: [Vec3D { x: 0.0, y: 1.0, z: 0.0, }, Vec3D { x: 1.0, y: 1.0, z: 0.0, }, Vec3D { x: 1.0, y: 1.0, z: 0.0, }], },
-
-		// bottom
-		Triangle { points: [Vec3D { x: 1.0, y: 0.0, z: 1.0, }, Vec3D { x: 0.0, y: 0.0, z: 1.0, }, Vec3D { x: 0.0, y: 0.0, z: 0.0, }], },
-		Triangle { points: [Vec3D { x: 1.0, y: 0.0, z: 1.0, }, Vec3D { x: 0.0, y: 0.0, z: 0.0, }, Vec3D { x: 1.0, y: 0.0, z: 0.0, }], },
-	]};
+	let args: Vec<String> = args().collect();
+	if args.len() != 3 {
+		return Err(RendererError::InitError(
+			"bad arguments supplied\nneed <filename> and <distance from camera>"
+			.to_string()
+		))?;
+	}
+	let loaded_mesh: Mesh = Mesh::from_obj_file(args[1].as_str())?;
+	let z_translation: f32 = args[2].parse::<f32>()?;
 
 	const FRAMERATE_DELAY_MS: u64 = ((1.0 / 144.0) * 1000.0) as u64 ;
 
@@ -148,6 +263,8 @@ fn main() -> anyhow::Result<()> {
 	projection_matrix.set(2, 2, Z_SCALING_FACTOR);
 	projection_matrix.set(2, 3, 1.0);
 	projection_matrix.set(3, 2, -ZNEAR * Z_SCALING_FACTOR);
+
+	let mut camera: Vec3D = Vec3D { x: 0.0, y: 0.0, z: 0.0 };
 
 	let (mut canvas, mut events) = initialize_canvas((WIDTH, HEIGHT), "window")?;
 	let mut elapsed_time: f32 = 0.0;
@@ -182,28 +299,54 @@ fn main() -> anyhow::Result<()> {
 		rot_x.set(2, 2, (elapsed_time * 0.5).cos());
 		rot_x.set(3, 3, 1.0);
 
-		for tri in &cube_mesh.tris {
+		let mut tris_to_draw: Vec<Triangle> = vec![];
+		for tri in &loaded_mesh.tris {
 			let mut ntri: Triangle = tri.clone();
 
 			ntri.apply_matrix_transform(&rot_z);
 			ntri.apply_matrix_transform(&rot_x);
 
-			ntri.translate(0.0, 0.0, 3.0);
+			ntri.translate(0.0, 0.0, z_translation);
+
+			if ntri.normal().dot_product(&ntri.points[0].sub_vec(&camera)) >= 0.0 { continue; }
+
+			let mut light_direction = Vec3D { x: 0.0, y: 0.0, z: -1.0, };
+			light_direction.scale_in_place(1.0 / light_direction.len()); // does nothing when it's just a unit vector
+
+			let dot_prod: f32 = ntri.normal().dot_product(&light_direction);
+
+			let color_value: u8 =  (dot_prod * 256.0) as u8;
+			ntri.color = Color::RGB(color_value, color_value, color_value);
 
 			ntri.apply_matrix_transform(&projection_matrix);
 			ntri.points.iter_mut().for_each(|x: &mut Vec3D| {
-				x.add(1.0);
+				x.x += 1.0;
+				x.y += 1.0;
 				x.x *= 0.5 * WIDTH as f32;
 				x.y *= 0.5 * HEIGHT as f32;
 			});
-			for i in 0..3 {
-				canvas.draw_fline(
-					FPoint::new(ntri.points[i].x, ntri.points[i].y),
-					FPoint::new(ntri.points[(i + 1) % 3].x, ntri.points[(i + 1) % 3].y)
-				).or_else(|err| {
-					return Err(RendererError::DrawError(err));
-				})?;
-			}
+
+			tris_to_draw.push(ntri);
+		}
+
+		tris_to_draw.sort_unstable_by(|a, b| {
+			let z1: f32 = (a.points[0].z + a.points[1].z + a.points[2].z) / 3.0;
+			let z2: f32 = (b.points[0].z + b.points[1].z + b.points[2].z) / 3.0;
+			return z2.partial_cmp(&z1).unwrap();
+		});
+
+		for ntri in tris_to_draw {
+			canvas.filled_trigon(
+				ntri.points[0].x as i16,
+				ntri.points[0].y as i16,
+				ntri.points[1].x as i16,
+				ntri.points[1].y as i16,
+				ntri.points[2].x as i16,
+				ntri.points[2].y as i16,
+				ntri.color,
+			).or_else(|err| {
+				return Err(RendererError::DrawError(err));
+			})?;
 		}
 
 		/* end rendering code */
@@ -212,6 +355,7 @@ fn main() -> anyhow::Result<()> {
 		canvas.set_draw_color(Color::RGB(0, 0, 0));
 
 		let frame_time: u64 = frame_start_time.elapsed().as_millis() as u64;
+		println!("frame_time: {frame_time}ms");
 		if frame_time < FRAMERATE_DELAY_MS {
 			std::thread::sleep(
 				std::time::Duration::from_millis(FRAMERATE_DELAY_MS - frame_time)
